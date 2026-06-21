@@ -189,6 +189,10 @@ abstract class MFRules {
     record SpawnTypeCheck(EnumSet<MobSpawnType> types) implements FilterCheck {
         @Override
         public boolean isMatch(SpawnRequest req) {
+            if (req.spawnType == null) {
+                req.logger().debug(() -> "[MobFilter]     SpawnTypeCheck: spawn type could not be determined for " + req.entityType + ", assuming match");
+                return true;
+            }
             boolean isMatch = this.types.contains(req.spawnType);
             req.logger().trace(() -> "[MobFilter]     SpawnTypeCheck: " + this.types + " " + req.spawnType + " " + isMatch + " " + isMatch);
             return isMatch;

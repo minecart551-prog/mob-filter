@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableList;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobCategory;
@@ -67,21 +68,44 @@ public class MFService {
     private final Logger logger = LogManager.getLogger(MFService.class);
     private FilterRuleList ruleList;
     private Level logLevel = Level.INFO;
-    final File jsonConfigFile = Paths.get("config", "mobfilter.json5").toFile();
-    final File yamlConfigFile = Paths.get("config", "mobfilter.yaml").toFile();
+    private final File jsonConfigFile = Paths.get("config", "mobfilter.json5").toFile();
+    private final File yamlConfigFile = Paths.get("config", "mobfilter.yaml").toFile();
+    private final ThreadLocal<MobSpawnType> spawnType = new ThreadLocal<>();
 
     // ===================================================================================
     // Public methods
 
     /**
-     * Called by the mixins to evaluate the rules to see if a random mob spawn should be allowed.
+     * Called during entity creation so that we can remember the spawnType for future use.
+     */
+    public void notifyEntityCreate(final MobSpawnType spawnType) {
+        if (spawnType == null) {
+            this.logger.debug(() -> "Ignoring attempt to set null spawnType");
+            return;
+        }
+        if (this.spawnType.get() != null) {
+            this.logger.trace(() -> "Unexpectedly changing existing spawnType from " +  this.spawnType.get() + " to " + spawnType);
+        }
+        this.spawnType.set(spawnType);
+    }
+
+    /**
+     * Called just as entities are being added to the world to determine whether they should
+     * be allowed.
      */
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    public boolean isSpawnAllowed(ServerLevel serverLevel,
-                                  MobSpawnType spawnType, EntityType<? extends Mob> entityType,
-                                  BlockPos pos) {
+    public boolean isSpawnAllowed(final ServerLevel serverLevel, final Entity entity) {
         if (this.ruleList == null) return true;
-        final SpawnRequest req = new SpawnRequest(serverLevel, spawnType, entityType.getCategory(), entityType, pos, this.logger);
+        if (serverLevel.isClientSide()) return true;
+        if (!(entity instanceof Mob)) return true;
+        final MobSpawnType spawnType = this.spawnType.get();
+        if (spawnType == null) {
+            this.logger.debug(() -> "No spawnType was set for " + entity.getType());
+        } else {
+            this.spawnType.remove();
+        }
+        final EntityType<?> entityType = entity.getType();
+        final SpawnRequest req = new SpawnRequest(serverLevel, spawnType, entityType.getCategory(), entityType, entity.blockPosition(), this.logger);
         final boolean allowSpawn = ruleList.isSpawnAllowed(req);
         if (this.logLevel.isLessSpecificThan(Level.DEBUG)) { // redundant but this gets called a lot
             if (allowSpawn) {
@@ -113,7 +137,7 @@ public class MFService {
     }
 
     /**
-     * Re/loads mobfilter.yaml and initializes a new FiluterRuleList.
+     * Re/loads mobfilter.json5 and initializes a new FilterRuleList.
      */
     public void loadConfig() {
         this.ruleList = null;
@@ -145,9 +169,9 @@ public class MFService {
             if (this.ruleList == null) {
                 this.logger.warn("[MobFilter] No rules configured in ");
             } else {
-                this.logger.info("[MobFilter] "+ruleList.getSize()+" rule(s) loaded:");
-                 for (FilterRule rule : this.ruleList.getRules()) {
-                     this.logger.info("- "+rule.toString());
+                this.logger.info("[MobFilter] " + ruleList.getSize() + " rule(s) loaded:");
+                for (FilterRule rule : this.ruleList.getRules()) {
+                    this.logger.info("- " + rule.toString());
                 }
             }
             //
@@ -211,11 +235,21 @@ public class MFService {
                 final EnumSet<MobCategory> enumSet = EnumSet.copyOf(Arrays.asList(when.category));
                 checks.add(new CategoryCheck(enumSet));
             }
-            if (when.entityId != null) checks.add(new EntityIdCheck(IdMatcher.of(when.entityId)));
-            if (when.worldName != null) checks.add(new WorldNameCheck(Matcher.of(when.worldName)));
-            if (when.dimensionId != null) checks.add(new DimensionCheck(IdMatcher.of(when.dimensionId)));
-            if (when.biomeId != null) checks.add(new BiomeCheck(IdMatcher.of(when.biomeId)));
-            if (when.blockId != null) checks.add(new BlockIdCheck(IdMatcher.of(when.blockId)));
+            if (when.entityId != null) {
+                checks.add(new EntityIdCheck(IdMatcher.of(when.entityId)));
+            }
+            if (when.worldName != null) {
+                checks.add(new WorldNameCheck(Matcher.of(when.worldName)));
+            }
+            if (when.dimensionId != null) {
+                checks.add(new DimensionCheck(IdMatcher.of(when.dimensionId)));
+            }
+            if (when.biomeId != null) {
+                checks.add(new BiomeCheck(IdMatcher.of(when.biomeId)));
+            }
+            if (when.blockId != null) {
+                checks.add(new BlockIdCheck(IdMatcher.of(when.blockId)));
+            }
             if (when.blockX != null) {
                 int[] range = parseRange(when.blockX);
                 checks.add(new BlockPosCheck(Direction.Axis.X, range[0], range[1]));
